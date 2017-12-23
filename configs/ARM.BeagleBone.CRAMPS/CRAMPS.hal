@@ -27,8 +27,8 @@ loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[TRAJ]AX
 # load low-level drivers
 loadrt hal_bb_gpio output_pins=816,822,823,824,825,826,914,923,925 input_pins=807,808,809,810,817,911,913
 loadrt [PRUCONF](DRIVER) prucode=$(HAL_RTMOD_DIR)/[PRUCONF](PRUBIN) [PRUCONF](CONFIG) halname=hpg pru_period=4000
-loadrt pid count=2
-loadrt limit1 count=2
+loadrt pid count=3
+loadrt limit1 count=3
 
 # load gantry
 newinst gantry gantry.0 pincount=2
@@ -37,6 +37,9 @@ newinst gantry gantry.0 pincount=2
 # Python user-mode HAL module to read ADC value and generate a thermostat output for PWM
 # c = analog input channel and thermistor table
 loadusr -Wn Therm hal_temp_bbb -n Therm -c 04:epcos_B57560G1104,05:epcos_B57560G1104 -b CRAMPS
+
+# read SPI TC amp device MAX31855 @ /dev/spidev2.0
+loadusr -Wn TC hal_temp_tc -n TC -d 2.0:MAX31855
 
 # ################################################
 # THREADS
@@ -49,8 +52,10 @@ addf motion-command-handler               servo-thread
 addf motion-controller                    servo-thread
 addf pid.0.do-pid-calcs                   servo-thread
 addf pid.1.do-pid-calcs                   servo-thread
+addf pid.2.do-pid-calcs                   servo-thread
 addf limit1.0                             servo-thread
 addf limit1.1                             servo-thread
+addf limit1.2                             servo-thread
 addf hpg.update                           servo-thread
 addf bb_gpio.write                        servo-thread
 addf gantry.0.write                       servo-thread
@@ -204,16 +209,16 @@ net switches-z1 <= bb_gpio.p9.in-11
 net switches-z2 <= bb_gpio.p9.in-13
 
 net limit-x => axis.0.home-sw-in
-net limit-x => axis.0.neg-lim-sw-in
+#net limit-x => axis.0.neg-lim-sw-in
 net limit-y => axis.1.home-sw-in
-net limit-y => axis.1.neg-lim-sw-in
+#net limit-y => axis.1.neg-lim-sw-in
 
 net switches-z1     => gantry.0.joint.00.home
 net switches-z2     => gantry.0.joint.01.home
 net home-z          <= gantry.0.home
 net home-z          => axis.2.home-sw-in
 net limit-z         <= gantry.0.limit
-net limit-z         => axis.2.neg-lim-sw-in
+#net limit-z         => axis.2.neg-lim-sw-in
 
 
 
@@ -265,6 +270,8 @@ net servo.4 bb_gpio.p8.out-22
 # If you change any names here, lots of things will break!
 newsig e0.temp.set   float
 newsig e0.temp.meas  float
+newsig e1.temp.set   float
+newsig e1.temp.meas  float
 newsig bed.temp.set  float
 newsig bed.temp.meas float
 
@@ -317,21 +324,38 @@ net e0.heaterl => hpg.pwmgen.00.out.01.value
 # PWM mimics hm2 implementation, which generates output for negative values
 setp limit1.0.min 0
 
-# PID for Bed temperature control
-net bed.temp.meas    <= Therm.ch-05.value
-net bed.temp.meas    => pid.1.feedback
 
-sets bed.temp.set  0
-net bed.temp.set     => pid.1.command
+# PID for Extruder 1 temperature control
+net e1.temp.meas    <= TC.ch-2:0.value
+net e1.temp.meas    => pid.1.feedback
 
-net bed.heater  <= pid.1.output
-net bed.heater  => limit1.1.in
-net bed.heaterl <= limit1.1.out
-net bed.heaterl => hpg.pwmgen.00.out.00.value
+sets e1.temp.set  0
+net e1.temp.set     => pid.1.command
+
+net e1.heater  <= pid.1.output
+net e1.heater  => limit1.1.in
+net e1.heaterl <= limit1.1.out
+net e1.heaterl => hpg.pwmgen.00.out.02.value
 
 # Limit heater PWM to positive values
 # PWM mimics hm2 implementation, which generates output for negative values
 setp limit1.1.min 0
+
+# PID for Bed temperature control
+net bed.temp.meas    <= Therm.ch-05.value
+net bed.temp.meas    => pid.2.feedback
+
+sets bed.temp.set  0
+net bed.temp.set     => pid.2.command
+
+net bed.heater  <= pid.2.output
+net bed.heater  => limit1.2.in
+net bed.heaterl <= limit1.2.out
+net bed.heaterl => hpg.pwmgen.00.out.00.value
+
+# Limit heater PWM to positive values
+# PWM mimics hm2 implementation, which generates output for negative values
+setp limit1.2.min 0
 
 # PID Parameters for adjusting temperature control
 # Extruder
@@ -345,13 +369,24 @@ setp pid.0.maxerrorI 1.0
 setp pid.0.bias    0.5
 setp pid.0.enable   1
 
+# Extruder
+#setp pid.0.FF0      0
+#setp pid.0.FF1      0
+#setp pid.0.FF2      0
+setp pid.1.Pgain  0.30
+setp pid.1.Igain  0.00001
+setp pid.1.Dgain  0.9375
+setp pid.1.maxerrorI 1.0
+setp pid.1.bias    0.5
+setp pid.1.enable   1
+
 # Bed
 #setp pid.1.FF0      0
 #setp pid.1.FF1      0
 #setp pid.1.FF2      0
-setp pid.1.Pgain  1
-setp pid.1.Igain  0.0
-setp pid.1.Dgain  0.0
-setp pid.1.maxerrorI 1.0
-setp pid.1.bias    0.5
-setp pid.1.enable   1
+setp pid.2.Pgain  1
+setp pid.2.Igain  0.0
+setp pid.2.Dgain  0.0
+setp pid.2.maxerrorI 1.0
+setp pid.2.bias    0.5
+setp pid.2.enable   1
